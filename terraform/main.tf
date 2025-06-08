@@ -1,11 +1,111 @@
-variable "default_tags" {
-  type = map(string)
-}
-
 provider "aws" {
   profile = "sandbox-developer"
   region  = "ap-northeast-1"
   default_tags {
     tags = var.default_tags
   }
+}
+
+/*
+    * 予算アラートのSNSトピックを作成し、メール通知を設定する
+    * SNSトピックに予算アラートのポリシーを設定し、AWS Budgetsからの通知を許可する
+    * 月間予算を設定し、90%の予算に達した場合にSNSトピックとメールアドレスに通知する
+    * AWS Chatbotを設定し、SNSトピックからの通知をSlackチャンネルにも送信する
+*/
+resource "aws_sns_topic" "budget_alert" {
+  name = "budget-alert-topic"
+}
+
+resource "aws_sns_topic_subscription" "budget_alert_email" {
+  topic_arn = aws_sns_topic.budget_alert.arn
+  protocol  = "email"
+  endpoint  = var.budget_alert_email_address
+}
+
+resource "aws_sns_topic_policy" "budget_alert_policy" {
+  arn = aws_sns_topic.budget_alert.arn
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowBudgetToPublish"
+        Effect = "Allow"
+        Principal = {
+          Service = "budgets.amazonaws.com"
+        }
+        Action   = "SNS:Publish"
+        Resource = aws_sns_topic.budget_alert.arn
+      }
+    ]
+  })
+}
+
+resource "aws_budgets_budget" "sandbox_monthly" {
+  name         = "sandbox-monthly-budget"
+  budget_type  = "COST"
+  time_unit    = "MONTHLY"
+  limit_amount = var.budget_limit_usd
+  limit_unit   = "USD"
+
+  cost_filter {
+    name   = "LinkedAccount"
+    values = [var.budget_alert_account_id]
+  }
+
+  notification {
+    notification_type          = "FORECASTED" # 予算の予測値に基づく通知（超えそうだったら通知）
+    threshold_type             = "PERCENTAGE"
+    threshold                  = 90
+    comparison_operator        = "GREATER_THAN" # 予算の90%を超えた場合に通知
+    subscriber_email_addresses = [var.budget_alert_email_address]
+    subscriber_sns_topic_arns  = [aws_sns_topic.budget_alert.arn]
+  }
+}
+
+resource "aws_iam_role" "chatbot_role" {
+  name = "AWSchatbotServiceRole"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "chatbot.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "chatbot_sns_policy" {
+  name = "ChatbotSNSAccess"
+  role = aws_iam_role.chatbot_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "sns:ListTopics",
+          "sns:ListSubscriptionsByTopic",
+          "sns:GetTopicAttributes",
+          "sns:Subscribe"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_chatbot_slack_channel_configuration" "budget_alert_slack" {
+  configuration_name = "budget-alert-to-slack"
+
+  iam_role_arn     = aws_iam_role.chatbot_role.arn
+  slack_channel_id = var.slack_channel_id             # Slackチャンネル or DM の ID
+  slack_team_id    = var.slack_team_id                # SlackワークスペースのID
+  sns_topic_arns   = [aws_sns_topic.budget_alert.arn] # 既存のSNSトピックを使う
+
+  logging_level = "ERROR"
 }
