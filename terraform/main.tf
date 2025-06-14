@@ -1,11 +1,3 @@
-provider "aws" {
-  profile = "sandbox-developer"
-  region  = "ap-northeast-1"
-  default_tags {
-    tags = var.default_tags
-  }
-}
-
 /*
     * 予算アラートのSNSトピックを作成し、メール通知を設定する
     * SNSトピックに予算アラートのポリシーを設定し、AWS Budgetsからの通知を許可する
@@ -108,4 +100,38 @@ resource "aws_chatbot_slack_channel_configuration" "budget_alert_slack" {
   sns_topic_arns   = [aws_sns_topic.budget_alert.arn] # 既存のSNSトピックを使う
 
   logging_level = "ERROR"
+}
+
+/*
+  * ECRレポジトリの作成
+*/
+resource "aws_ecr_repository" "nuke_lambda" {
+  name                 = "nuke-lambda"
+  image_tag_mutability = "MUTABLE"
+
+  tags = {
+    Name = "nuke-lambda-repository"
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "nuke_lambda_policy" {
+  repository = aws_ecr_repository.nuke_lambda.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Expire images older than 5 days"
+        selection = {
+          tagStatus   = "any"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 5
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
 }

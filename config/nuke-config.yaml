@@ -1,0 +1,17 @@
+regions:
+  - ap-northeast-1
+
+account-blocklist:
+  - "471112978618" # 管理・本番アカウントを除外
+
+accounts:
+  "455921291711":
+    filters:
+      IAMUser:
+        - "*"
+      IAMRole:
+        - "*"
+      IAMGroup:
+        - "*"
+      IAMPolicy:
+        - "*"
