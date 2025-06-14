@@ -104,6 +104,9 @@ resource "aws_chatbot_slack_channel_configuration" "budget_alert_slack" {
 
 /*
   * ECRレポジトリの作成
+  * ECRレポジトリのライフサイクルポリシーを設定
+  * ライフサイクルポリシーで、イメージのタグが「any」で、プッシュから5日以上経過したイメージを削除する
+  * ECRレポジトリのイメージを使用してLambda関数をデプロイする
 */
 resource "aws_ecr_repository" "nuke_lambda" {
   name                 = "nuke-lambda"
@@ -134,4 +137,54 @@ resource "aws_ecr_lifecycle_policy" "nuke_lambda_policy" {
       }
     ]
   })
+}
+
+resource "aws_lambda_function" "nuke_lambda" {
+  function_name = "nuke-lambda"
+  package_type  = "Image"
+  image_uri     = var.lambda_image_uri
+  role          = aws_iam_role.nuke_lambda_exec.arn
+  timeout       = 900 # 15 minutes timeout
+  memory_size   = 3008
+
+  depends_on = [
+    aws_ecr_repository.nuke_lambda,
+    aws_ecr_lifecycle_policy.nuke_lambda_policy
+  ]
+
+  environment {
+    variables = {
+      SLACK_CHANNEL_ID   = var.slack_channel_id
+      SLACK_TEAM_ID      = var.slack_team_id
+      SNS_TOPIC_ARN      = aws_sns_topic.budget_alert.arn
+      BUDGET_LIMIT_USD   = tostring(var.budget_limit_usd)
+      BUDGET_ALERT_EMAIL = var.budget_alert_email_address
+    }
+  }
+}
+
+resource "aws_iam_role" "nuke_lambda_exec" {
+  name = "nuke-lambda-exec-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name = "nuke-lambda-role"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "nuke_lambda_logs" {
+  role       = aws_iam_role.nuke_lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }

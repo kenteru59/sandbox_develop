@@ -27,3 +27,8 @@ variable "slack_team_id" {
   description = "Slack通知を受け取るワークスペースのID"
   type        = string
 }
+
+variable "lambda_image_uri" {
+  description = "Lambda関数のイメージURI(ECRのURI)"
+  type        = string
+}

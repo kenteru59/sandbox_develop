@@ -1,37 +1,26 @@
-FROM amazonlinux:2
+# Lambda対応のベースイメージを使用（Python 3.11）
+FROM public.ecr.aws/lambda/python:3.11
 
-# 必要なツールをインストール（tar, unzip, python, pipなど）
-RUN yum update -y && \
-    yum install -y \
-        tar \
-        gzip \
-        unzip \
-        python3 \
-        python3-pip
-
-# Lambda Runtime Interface Client をインストール
-RUN pip3 install awslambdaric
-
-# 🔽 RIE を追加（これが必要！）
-ADD https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie /usr/local/bin/aws-lambda-rie
-RUN chmod +x /usr/local/bin/aws-lambda-rie
+# tar コマンドをインストール
+RUN yum install -y tar gzip
 
 # 作業ディレクトリ
 WORKDIR /var/task
 
-# aws-nukeのバイナリと設定
+# aws-nuke バイナリと設定ファイルを配置
 COPY resources/aws-nuke-v2.25.0-linux-amd64.tar.gz .
 COPY config/nuke-config.yaml .
 
+# aws-nuke を展開して配置
 RUN tar -xzf aws-nuke-v2.25.0-linux-amd64.tar.gz && \
     mv aws-nuke-v2.25.0-linux-amd64 aws-nuke && \
     chmod +x aws-nuke
 
-# Lambdaハンドラコードと依存
+# Lambda ハンドラーと依存ライブラリを配置
 COPY lambda/nuke_handler.py .
 COPY lambda/requirements.txt .
-RUN pip3 install -r requirements.txt
 
-# Lambdaエントリポイントを修正
-ENTRYPOINT ["/usr/local/bin/aws-lambda-rie", "/usr/bin/python3", "-m", "awslambdaric"]
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Lambdaのエントリポイント
 CMD ["nuke_handler.lambda_handler"]
