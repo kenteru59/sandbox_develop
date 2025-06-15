@@ -62,4 +62,4 @@ def get_account_ids():
 
 def lambda_handler(event, context):
     account_list = get_account_ids()
-    return {"accounts": account_list,"nuke_dry_run": "false"}  # または false}
+    return {"accounts": account_list,"nuke_dry_run": "false"}  

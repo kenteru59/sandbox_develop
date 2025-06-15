@@ -126,123 +126,26 @@ resource "aws_chatbot_slack_channel_configuration" "budget_alert_slack" {
 }
 
 /*
-  * ECRレポジトリの作成
-  * ECRレポジトリのライフサイクルポリシーを設定
-  * ライフサイクルポリシーで、イメージのタグが「any」で、プッシュから5日以上経過したイメージを削除する
-  * ECRレポジトリのイメージを使用してLambda関数をデプロイする
+　* aws nukeの設定ファイルを保存するS3バケットを作成
+  * OUに所属するアカウントIDを取得するLambda関数を作成
+  * 取得したアカウントIDを引数として、aws-nukeを実行するためのCodeBuildプロジェクトを作成
+  * Lambdaを実行後、CodeBuildプロジェクトを起動するStep Functionsを作成
+  * Step Functionsを定期的に実行するためのEventBridgeルールを作成
 */
-resource "aws_ecr_repository" "nuke_lambda" {
-  name                 = "nuke-lambda"
-  image_tag_mutability = "MUTABLE"
-
-  tags = {
-    Name = "nuke-lambda-repository"
-  }
+resource "aws_s3_bucket" "nuke-config_bucket" {
+  bucket = "nuke-config-20250614"
+  # 手動で作ったものをimportしたため、他の設定は省略
 }
 
-resource "aws_ecr_lifecycle_policy" "nuke_lambda_policy" {
-  repository = aws_ecr_repository.nuke_lambda.name
-
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Expire images older than 5 days"
-        selection = {
-          tagStatus   = "any"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 5
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
-  })
+resource "aws_s3_object" "nuke_config" {
+  bucket       = aws_s3_bucket.nuke-config_bucket.bucket
+  key          = "nuke-config.yaml"
+  source       = "${path.module}/../config/nuke-config.yaml"
+  etag         = filemd5("${path.module}/../config/nuke-config.yaml")
+  content_type = "text/yaml"
 }
 
-resource "aws_lambda_function" "nuke_lambda" {
-  function_name = "nuke-lambda"
-  package_type  = "Image"
-  image_uri     = var.lambda_image_uri
-  role          = aws_iam_role.nuke_lambda_exec.arn
-  timeout       = 900 # 15 minutes timeout
-  memory_size   = 3008
 
-  depends_on = [
-    aws_ecr_repository.nuke_lambda,
-    aws_ecr_lifecycle_policy.nuke_lambda_policy
-  ]
-
-  environment {
-    variables = {
-      SLACK_CHANNEL_ID   = var.slack_channel_id
-      SLACK_TEAM_ID      = var.slack_team_id
-      SNS_TOPIC_ARN      = aws_sns_topic.budget_alert.arn
-      BUDGET_LIMIT_USD   = tostring(var.budget_limit_usd)
-      BUDGET_ALERT_EMAIL = var.budget_alert_email_address
-    }
-  }
-}
-
-resource "aws_iam_role" "nuke_lambda_exec" {
-  name = "nuke-lambda-exec-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        },
-        Action = "sts:AssumeRole"
-      }
-    ]
-  })
-
-  tags = {
-    Name = "nuke-lambda-role"
-  }
-}
-
-resource "aws_iam_role_policy_attachment" "nuke_lambda_logs" {
-  role       = aws_iam_role.nuke_lambda_exec.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-resource "aws_iam_policy" "assume_nuke_role" {
-  name = "AllowAssumeNukeExecutionRole"
-
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect   = "Allow",
-        Action   = "sts:AssumeRole",
-        Resource = var.nuke_execution_role
-      },
-      {
-        Effect = "Allow",
-        Action = [
-          "ec2:*",
-          "iam:*"
-        ],
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "attach_assume_nuke" {
-  role       = aws_iam_role.nuke_lambda_exec.name
-  policy_arn = aws_iam_policy.assume_nuke_role.arn
-}
-
-/*
-  * 
-*/
 resource "aws_iam_role" "lambda_role" {
   name = "lambda_account_id_check_role"
 
