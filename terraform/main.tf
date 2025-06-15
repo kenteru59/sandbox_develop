@@ -550,3 +550,50 @@ resource "aws_sfn_state_machine" "aws_nuke_stepfunction" {
 EOF
 }
 
+# EventBridge ルール（cron式で毎日1時に起動の例）
+resource "aws_cloudwatch_event_rule" "trigger_nuke" {
+  name                = "trigger-nuke-stepfunction"
+  schedule_expression = "cron(20 3 * * ? *)"
+  description         = "定期的にaws-nuke Step Functionsを実行"
+}
+
+# EventBridge ターゲット
+resource "aws_cloudwatch_event_target" "nuke_stepfunction_target" {
+  rule      = aws_cloudwatch_event_rule.trigger_nuke.name
+  target_id = "nuke-stepfunction"
+  arn       = aws_sfn_state_machine.aws_nuke_stepfunction.arn
+  role_arn  = aws_iam_role.eventbridge_invoke_stepfunctions.arn
+}
+
+# EventBridge から Step Functions を実行する IAM ロール
+resource "aws_iam_role" "eventbridge_invoke_stepfunctions" {
+  name = "eventbridge-invoke-sfn-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = {
+        Service = "events.amazonaws.com"
+      },
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+# Step Functions 実行許可ポリシー
+resource "aws_iam_role_policy" "eventbridge_invoke_stepfunctions_policy" {
+  name = "invoke-stepfunction-policy"
+  role = aws_iam_role.eventbridge_invoke_stepfunctions.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = "states:StartExecution",
+        Resource = aws_sfn_state_machine.aws_nuke_stepfunction.arn
+      }
+    ]
+  })
+}
