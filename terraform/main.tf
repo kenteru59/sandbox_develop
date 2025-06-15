@@ -239,3 +239,82 @@ resource "aws_iam_role_policy_attachment" "attach_assume_nuke" {
   role       = aws_iam_role.nuke_lambda_exec.name
   policy_arn = aws_iam_policy.assume_nuke_role.arn
 }
+
+/*
+  * 
+*/
+resource "aws_iam_role" "lambda_role" {
+  name = "lambda_account_id_check_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "lambda_policy" {
+  name = "lambda_account_id_check_policy"
+  role = aws_iam_role.lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "organizations:ListAccounts"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sts:AssumeRole"
+        ]
+        Resource = "arn:aws:iam::*:role/AWSControlTowerExecution"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:ListAccountAliases"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ソースコードを自動ZIP
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/check_account_id"
+  output_path = "${path.module}/../check_account_id.zip"
+}
+
+resource "aws_lambda_function" "org_alias_lambda" {
+  function_name = "account_id_check"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "check_account_id.lambda_handler"
+  runtime       = "python3.12"
+  timeout       = 60
+
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+}
