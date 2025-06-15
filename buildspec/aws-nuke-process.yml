@@ -1,0 +1,41 @@
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - export AWS_NUKE_VERSION=$AWS_NukeVersion
+      - apt-get update
+      - apt-get install -y wget jq
+      - wget https://github.com/rebuy-de/aws-nuke/releases/download/v$AWS_NUKE_VERSION/aws-nuke-v$AWS_NUKE_VERSION-linux-amd64.tar.gz --no-check-certificate
+      - tar xvf aws-nuke-v$AWS_NUKE_VERSION-linux-amd64.tar.gz
+      - chmod +x aws-nuke-v$AWS_NUKE_VERSION-linux-amd64
+      - mv aws-nuke-v$AWS_NUKE_VERSION-linux-amd64 /usr/local/bin/aws-nuke
+      - aws-nuke version
+      - aws configure set profile.nuke.credential_source "EcsContainer"
+      - export AWS_PROFILE=nuke
+      - export AWS_DEFAULT_PROFILE=nuke
+      - export AWS_SDK_LOAD_CONFIG=1
+
+  build:
+    commands:
+      - echo "Configured nuke-config.yaml"
+      - aws s3 cp s3://nuke-config-20250614/nuke-config.yaml .
+      - echo "------------------------------------------------" >> error_log.txt
+      - echo "Running Nuke on Account"
+      - |
+        echo "Processing account: 455921291711"
+        aws configure set profile.nuke.role_arn arn:aws:iam::455921291711:role/AWSControlTowerExecution
+        log_file=aws-nuke-$(date +%Y%m%d%I%M%S).log
+
+        cp nuke-config.yaml nuke-config.yaml
+        sed -i "s/ACCOUNT/455921291711/g" nuke-config.yaml
+
+        if [ "$AWS_NukeDryRun" = "true" ]; then
+          aws-nuke -c nuke-config.yaml --quiet --force --profile nuke 2>&1 | tee -a $log_file
+        elif [ "$AWS_NukeDryRun" = "false" ]; then
+          aws-nuke -c nuke-config.yaml --quiet --force --no-dry-run --profile nuke 2>&1 | tee -a $log_file
+        else
+          echo "Couldn't determine Dryrun flag... exiting"
+          exit 1
+        fi
+
+        echo "Nuke completed successfully for account: 455921291711"

@@ -318,3 +318,235 @@ resource "aws_lambda_function" "org_alias_lambda" {
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 }
+
+# CodeBuild 実行用 IAM ロール
+resource "aws_iam_role" "codebuild_role" {
+  name = "codebuild-nuke-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "codebuild.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+# IAMロールに必要なポリシーをアタッチ
+resource "aws_iam_role_policy" "codebuild_policy" {
+  name = "codebuild-nuke-permissions"
+  role = aws_iam_role.codebuild_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:GetObject"
+        ],
+        Resource = "arn:aws:s3:::nuke-config-20250614/*"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "sts:AssumeRole"
+        ],
+        Resource = "arn:aws:iam::*:role/AWSControlTowerExecution"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# CodeBuild プロジェクト
+resource "aws_codebuild_project" "nuke_build" {
+  name          = "aws-nuke-runner"
+  description   = "Run aws-nuke using CodeBuild"
+  service_role  = aws_iam_role.codebuild_role.arn
+  build_timeout = 30
+  source {
+    type      = "NO_SOURCE"
+    buildspec = file("${path.module}/../buildspec/aws-nuke-process.yml")
+  }
+
+  environment {
+    compute_type    = "BUILD_GENERAL1_SMALL"
+    image           = "aws/codebuild/standard:7.0"
+    type            = "LINUX_CONTAINER"
+    privileged_mode = true
+
+    environment_variable {
+      name  = "AWS_NukeVersion"
+      value = "2.24.0"
+    }
+
+    environment_variable {
+      name  = "AWS_NukeDryRun"
+      value = "true"
+    }
+  }
+
+  artifacts {
+    type = "NO_ARTIFACTS"
+  }
+}
+resource "aws_iam_role" "stepfunction_role" {
+  name = "stepfunction-nuke-role"
+
+  assume_role_policy = jsonencode({
+    Version : "2012-10-17",
+    Statement : [
+      {
+        Action : "sts:AssumeRole",
+        Effect : "Allow",
+        Principal : {
+          Service : "states.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "stepfunction_policy" {
+  name = "stepfunction-nuke-permissions"
+  role = aws_iam_role.stepfunction_role.id
+
+  policy = jsonencode({
+    Version : "2012-10-17",
+    Statement : [
+      {
+        Effect : "Allow",
+        Action : [
+          "lambda:InvokeFunction"
+        ],
+        Resource : "arn:aws:lambda:ap-northeast-1:471112978618:function:account_id_check"
+      },
+      {
+        Effect : "Allow",
+        Action : [
+          "codebuild:StartBuild",
+          "codebuild:BatchGetBuilds"
+        ],
+        Resource : "arn:aws:codebuild:ap-northeast-1:471112978618:project/aws-nuke-runner"
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "events:PutRule",
+          "events:PutTargets",
+          "events:DescribeRule"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_sfn_state_machine" "aws_nuke_stepfunction" {
+  name     = "aws-nuke-cleanser"
+  role_arn = aws_iam_role.stepfunction_role.arn
+
+  definition = <<EOF
+{
+  "Comment": "AWS Nuke Account Cleanser",
+  "StartAt": "GetAccountIds",
+  "States": {
+    "GetAccountIds": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "account_id_check"
+      },
+      "ResultPath": "$.accountList",
+      "Next": "NukeCodeBuildJob"
+    },
+    "NukeCodeBuildJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::codebuild:startBuild.sync",
+      "Parameters": {
+        "ProjectName": "arn:aws:codebuild:ap-northeast-1:471112978618:project/aws-nuke-runner",
+        "EnvironmentVariablesOverride": [
+          {
+            "Name": "AccountId",
+            "Type": "PLAINTEXT",
+            "Value.$": "$.accountList.Payload.accounts"
+          },
+          {
+            "Name": "AWS_NukeDryRun",
+            "Type": "PLAINTEXT",
+            "Value.$": "$.accountList.Payload.nuke_dry_run"
+          },
+          {
+            "Name": "AWS_NukeVersion",
+            "Type": "PLAINTEXT",
+            "Value": "2.21.2"
+          }
+        ]
+      },
+      "Next": "NukeStatusCheck",
+      "ResultSelector": {
+        "NukeBuildOutput.$": "$.Build"
+      },
+      "ResultPath": "$.AccountCleanserRegionOutput",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
+          "BackoffRate": 1,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "NukeFailed",
+          "ResultPath": "$.AccountCleanserRegionOutput"
+        }
+      ]
+    },
+    "NukeStatusCheck": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.AccountCleanserRegionOutput.NukeBuildOutput.BuildStatus",
+          "StringEquals": "SUCCEEDED",
+          "Next": "NukeSuccess"
+        },
+        {
+          "Variable": "$.AccountCleanserRegionOutput.NukeBuildOutput.BuildStatus",
+          "StringEquals": "FAILED",
+          "Next": "NukeFailed"
+        }
+      ],
+      "Default": "NukeSuccess"
+    },
+    "NukeSuccess": {
+      "Type": "Succeed"
+    },
+    "NukeFailed": {
+      "Type": "Fail",
+      "Cause": "nukeの実行に失敗しました。"
+    }
+  }
+}
+EOF
+}
+
