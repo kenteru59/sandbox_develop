@@ -8,13 +8,13 @@ RUN yum install -y tar gzip
 WORKDIR /var/task
 
 # aws-nuke バイナリと設定ファイルを配置
-COPY resources/aws-nuke-v2.25.0-linux-amd64.tar.gz .
+COPY resources/aws-nuke-v3.56.1-linux-amd64.tar.gz .
 COPY config/nuke-config.yaml .
 
 # aws-nuke を展開して配置
-RUN tar -xzf aws-nuke-v2.25.0-linux-amd64.tar.gz && \
-    mv aws-nuke-v2.25.0-linux-amd64 aws-nuke && \
-    chmod +x aws-nuke
+RUN tar -xzf aws-nuke-v3.56.1-linux-amd64.tar.gz && \
+    chmod +x aws-nuke && \
+    ./aws-nuke --version
 
 # Lambda ハンドラーと依存ライブラリを配置
 COPY lambda/nuke_handler.py .

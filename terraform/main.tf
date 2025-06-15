@@ -54,6 +54,29 @@ resource "aws_budgets_budget" "sandbox_monthly" {
   }
 }
 
+resource "aws_budgets_budget" "sandbox_monthly_actual" {
+  name         = "sandbox-monthly-budget-actual"
+  budget_type  = "COST"
+  time_unit    = "MONTHLY"
+  limit_amount = var.budget_limit_usd
+  limit_unit   = "USD"
+
+  cost_filter {
+    name   = "LinkedAccount"
+    values = [var.budget_alert_account_id]
+  }
+
+  notification {
+    notification_type          = "ACTUAL"
+    threshold_type             = "PERCENTAGE"
+    threshold                  = 90
+    comparison_operator        = "GREATER_THAN" # 予算の90%を超えた場合に通知
+    subscriber_email_addresses = [var.budget_alert_email_address]
+    subscriber_sns_topic_arns  = [aws_sns_topic.budget_alert.arn]
+  }
+}
+
+
 resource "aws_iam_role" "chatbot_role" {
   name = "AWSchatbotServiceRole"
   assume_role_policy = jsonencode({
@@ -187,4 +210,32 @@ resource "aws_iam_role" "nuke_lambda_exec" {
 resource "aws_iam_role_policy_attachment" "nuke_lambda_logs" {
   role       = aws_iam_role.nuke_lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_policy" "assume_nuke_role" {
+  name = "AllowAssumeNukeExecutionRole"
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = "sts:AssumeRole",
+        Resource = var.nuke_execution_role
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "ec2:*",
+          "iam:*"
+        ],
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "attach_assume_nuke" {
+  role       = aws_iam_role.nuke_lambda_exec.name
+  policy_arn = aws_iam_policy.assume_nuke_role.arn
 }

@@ -32,3 +32,8 @@ variable "lambda_image_uri" {
   description = "Lambda関数のイメージURI(ECRのURI)"
   type        = string
 }
+
+variable "nuke_execution_role" {
+  description = "Nuke実行用のIAMロールARN"
+  type        = string
+}
